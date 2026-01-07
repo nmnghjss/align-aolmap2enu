@@ -299,7 +299,7 @@ def create_metadata_xml(lon, lat, alt, output_path):
 
 
 def umeyama_align(X, Y, with_scale=True):
-    # X, Y: Nx3 arrays; find s,R,t so that Y ~ s*R*X + t
+    # X, Y: Nx3 arrays; find s, R, t so that Y ~ s*R*X + t
     assert X.shape == Y.shape
     n, m = X.shape
     muX = X.mean(axis=0)
@@ -396,6 +396,13 @@ def umeyama_align_ransac(X, Y, with_scale=True, max_iters=1000, inlier_threshold
         print(f"colmap与 gps 对齐后，距离误差统计信息: 均值={mean_dist:.3f} 米, 标准差={std_dist:.3f} 米")
         inliers = dists <= inlier_threshold
         count = int(inliers.sum())
+        
+        # 统计内点的误差均值和标准差
+        inlier_dists = dists[inliers]
+        if len(inlier_dists) > 0:
+            inlier_mean = np.mean(inlier_dists)
+            inlier_std = np.std(inlier_dists)
+            print(f"内点数量：{count}，内点距离误差统计信息: 均值={inlier_mean:.3f} 米, 标准差={inlier_std:.3f} 米")
 
         # 更新最优模型
         if count > best_count:
@@ -411,6 +418,13 @@ def umeyama_align_ransac(X, Y, with_scale=True, max_iters=1000, inlier_threshold
     if best_inliers is None or best_count < min_inliers:
         s, R, t = umeyama_align(X, Y, with_scale=with_scale)
         return s, R, t, np.ones(n, dtype=bool)
+
+    # 打印最佳内点数量、误差均值和标准差
+    if best_inliers is not None:
+        best_inlier_dists = np.linalg.norm((best_model[0] * (best_model[1] @ X.T)).T + best_model[2] - Y, axis=1)[best_inliers]
+        best_inlier_mean = np.mean(best_inlier_dists)
+        best_inlier_std = np.std(best_inlier_dists)
+        print(f"最佳内点数量: {best_count}/{n}, 误差均值: {best_inlier_mean:.3f} 米, 标准差: {best_inlier_std:.3f} 米")
 
     # 使用所有内点重新拟合以获得更好估计
     s_ref, R_ref, t_ref = umeyama_align(X[best_inliers], Y[best_inliers], with_scale=with_scale)
@@ -640,6 +654,8 @@ def perform_gps_alignment(
     gps_images_dir,
     model_dir,
     aligned_output_dir,
+    inlier_threshold=2.0,
+    ransac_max_iters=2000,
     gps_image_filter=None,
     gps_metadata=None,
     show_viz=False,
@@ -759,7 +775,7 @@ def perform_gps_alignment(
         # print("center_colmap:", center_colmap)
         # print("center_gps:", center_gps)
         print("找到 {} 个GPS对应点".format(len(gps_pts)))
-        scale, R_align, shift, _ = umeyama_align_ransac(colmap_pts, gps_pts, max_iters=1000, inlier_threshold=2.0)
+        scale, R_align, shift, _ = umeyama_align_ransac(colmap_pts, gps_pts, max_iters=ransac_max_iters, inlier_threshold=inlier_threshold)
         print("scale:", scale)
         print("R:\n", R_align)
         print("t:", shift)        
@@ -1184,6 +1200,10 @@ def main():
         action="store_true",
         help="可选：在对齐完成后弹出可视化窗口，显示相机中心与GPS点的对应关系",
     )
+
+    parser.add_argument("--inlier_threshold", type=float, default=2.0, help="RANSAC内点阈值（米），默认2.0")
+    parser.add_argument("--ransac_max_iters", type=int, default=2000, help="RANSAC最大迭代次数，默认2000")
+
     args = parser.parse_args()
 
     workspace = os.path.abspath(args.workspace)
@@ -1210,6 +1230,8 @@ def main():
         gps_images_dir=gps_images_dir,
         model_dir=model_dir,
         aligned_output_dir=aligned_output_dir,
+        inlier_threshold=args.inlier_threshold,
+        ransac_max_iters=args.ransac_max_iters,
         gps_image_filter=gps_image_filter,
         gps_metadata=gps_metadata,
         show_viz=args.show_viz,
